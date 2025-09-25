@@ -4,35 +4,33 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { GroundingMetadata } from '@google/genai';
-import { BaseTool, Icon, ToolResult } from './tools.js';
-import { Type } from '@google/genai';
-import { SchemaValidator } from '../utils/schemaValidator.js';
+import {
+  BaseDeclarativeTool,
+  BaseToolInvocation,
+  Kind,
+  type ToolInvocation,
+  type ToolResult,
+  type ToolCallConfirmationDetails,
+  type ToolInfoConfirmationDetails,
+  ToolConfirmationOutcome,
+} from './tools.js';
 
+import type { Config } from '../config/config.js';
+import { ApprovalMode } from '../config/config.js';
 import { getErrorMessage } from '../utils/errors.js';
-import { Config } from '../config/config.js';
-import { getResponseText } from '../utils/generateContentResponseUtilities.js';
 
-interface GroundingChunkWeb {
-  uri?: string;
-  title?: string;
+interface TavilyResultItem {
+  title: string;
+  url: string;
+  content?: string;
+  score?: number;
+  published_date?: string;
 }
 
-interface GroundingChunkItem {
-  web?: GroundingChunkWeb;
-  // Other properties might exist if needed in the future
-}
-
-interface GroundingSupportSegment {
-  startIndex: number;
-  endIndex: number;
-  text?: string; // text is optional as per the example
-}
-
-interface GroundingSupportItem {
-  segment?: GroundingSupportSegment;
-  groundingChunkIndices?: number[];
-  confidenceScores?: number[]; // Optional as per example
+interface TavilySearchResponse {
+  query: string;
+  answer?: string;
+  results: TavilyResultItem[];
 }
 
 /**
@@ -42,7 +40,6 @@ export interface WebSearchToolParams {
   /**
    * The search query.
    */
-
   query: string;
 }
 
@@ -50,31 +47,148 @@ export interface WebSearchToolParams {
  * Extends ToolResult to include sources for web search.
  */
 export interface WebSearchToolResult extends ToolResult {
-  sources?: GroundingMetadata extends { groundingChunks: GroundingChunkItem[] }
-    ? GroundingMetadata['groundingChunks']
-    : GroundingChunkItem[];
+  sources?: Array<{ title: string; url: string }>;
+}
+
+class WebSearchToolInvocation extends BaseToolInvocation<
+  WebSearchToolParams,
+  WebSearchToolResult
+> {
+  constructor(
+    private readonly config: Config,
+    params: WebSearchToolParams,
+  ) {
+    super(params);
+  }
+
+  override getDescription(): string {
+    return `Searching the web for: "${this.params.query}"`;
+  }
+
+  override async shouldConfirmExecute(
+    _abortSignal: AbortSignal,
+  ): Promise<ToolCallConfirmationDetails | false> {
+    if (this.config.getApprovalMode() === ApprovalMode.AUTO_EDIT) {
+      return false;
+    }
+
+    const confirmationDetails: ToolInfoConfirmationDetails = {
+      type: 'info',
+      title: 'Confirm Web Search',
+      prompt: `Search the web for: "${this.params.query}"`,
+      onConfirm: async (outcome: ToolConfirmationOutcome) => {
+        if (outcome === ToolConfirmationOutcome.ProceedAlways) {
+          this.config.setApprovalMode(ApprovalMode.AUTO_EDIT);
+        }
+      },
+    };
+    return confirmationDetails;
+  }
+
+  async execute(signal: AbortSignal): Promise<WebSearchToolResult> {
+    const apiKey =
+      this.config.getTavilyApiKey() || process.env['TAVILY_API_KEY'];
+    if (!apiKey) {
+      return {
+        llmContent:
+          'Web search is disabled because TAVILY_API_KEY is not configured. Please set it in your settings.json, .env file, or via --tavily-api-key command line argument to enable web search.',
+        returnDisplay:
+          'Web search disabled. Configure TAVILY_API_KEY to enable Tavily search.',
+      };
+    }
+
+    try {
+      const response = await fetch('https://api.tavily.com/search', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          api_key: apiKey,
+          query: this.params.query,
+          search_depth: 'advanced',
+          max_results: 5,
+          include_answer: true,
+        }),
+        signal,
+      });
+
+      if (!response.ok) {
+        const text = await response.text().catch(() => '');
+        throw new Error(
+          `Tavily API error: ${response.status} ${response.statusText}${text ? ` - ${text}` : ''}`,
+        );
+      }
+
+      const data = (await response.json()) as TavilySearchResponse;
+
+      const sources = (data.results || []).map((r) => ({
+        title: r.title,
+        url: r.url,
+      }));
+
+      const sourceListFormatted = sources.map(
+        (s, i) => `[${i + 1}] ${s.title || 'Untitled'} (${s.url})`,
+      );
+
+      let content = data.answer?.trim() || '';
+      if (!content) {
+        // Fallback: build a concise summary from top results
+        content = sources
+          .slice(0, 3)
+          .map((s, i) => `${i + 1}. ${s.title} - ${s.url}`)
+          .join('\n');
+      }
+
+      if (sourceListFormatted.length > 0) {
+        content += `\n\nSources:\n${sourceListFormatted.join('\n')}`;
+      }
+
+      if (!content.trim()) {
+        return {
+          llmContent: `No search results or information found for query: "${this.params.query}"`,
+          returnDisplay: 'No information found.',
+        };
+      }
+
+      return {
+        llmContent: `Web search results for "${this.params.query}":\n\n${content}`,
+        returnDisplay: `Search results for "${this.params.query}" returned.`,
+        sources,
+      };
+    } catch (error: unknown) {
+      const errorMessage = `Error during web search for query "${this.params.query}": ${getErrorMessage(
+        error,
+      )}`;
+      console.error(errorMessage, error);
+      return {
+        llmContent: `Error: ${errorMessage}`,
+        returnDisplay: `Error performing web search.`,
+      };
+    }
+  }
 }
 
 /**
  * A tool to perform web searches using Google Search via the Gemini API.
  */
-export class WebSearchTool extends BaseTool<
+export class WebSearchTool extends BaseDeclarativeTool<
   WebSearchToolParams,
   WebSearchToolResult
 > {
-  static readonly Name: string = 'google_web_search';
+  static readonly Name: string = 'web_search';
 
   constructor(private readonly config: Config) {
     super(
       WebSearchTool.Name,
-      'GoogleSearch',
-      'Performs a web search using Google Search (via the Gemini API) and returns the results. This tool is useful for finding information on the internet based on a query.',
-      Icon.Globe,
+      'WebSearch',
+      'Performs a web search using the Tavily API and returns a concise answer with sources. Requires the TAVILY_API_KEY environment variable.',
+      Kind.Search,
       {
-        type: Type.OBJECT,
+        type: 'object',
         properties: {
           query: {
-            type: Type.STRING,
+            type: 'string',
             description: 'The search query to find information on the web.',
           },
         },
@@ -88,111 +202,18 @@ export class WebSearchTool extends BaseTool<
    * @param params The parameters to validate
    * @returns An error message string if validation fails, null if valid
    */
-  validateParams(params: WebSearchToolParams): string | null {
-    const errors = SchemaValidator.validate(this.schema.parameters, params);
-    if (errors) {
-      return errors;
-    }
-
+  protected override validateToolParamValues(
+    params: WebSearchToolParams,
+  ): string | null {
     if (!params.query || params.query.trim() === '') {
       return "The 'query' parameter cannot be empty.";
     }
     return null;
   }
 
-  getDescription(params: WebSearchToolParams): string {
-    return `Searching the web for: "${params.query}"`;
-  }
-
-  async execute(
+  protected createInvocation(
     params: WebSearchToolParams,
-    signal: AbortSignal,
-  ): Promise<WebSearchToolResult> {
-    const validationError = this.validateToolParams(params);
-    if (validationError) {
-      return {
-        llmContent: `Error: Invalid parameters provided. Reason: ${validationError}`,
-        returnDisplay: validationError,
-      };
-    }
-    const geminiClient = this.config.getGeminiClient();
-
-    try {
-      const response = await geminiClient.generateContent(
-        [{ role: 'user', parts: [{ text: params.query }] }],
-        { tools: [{ googleSearch: {} }] },
-        signal,
-      );
-
-      const responseText = getResponseText(response);
-      const groundingMetadata = response.candidates?.[0]?.groundingMetadata;
-      const sources = groundingMetadata?.groundingChunks as
-        | GroundingChunkItem[]
-        | undefined;
-      const groundingSupports = groundingMetadata?.groundingSupports as
-        | GroundingSupportItem[]
-        | undefined;
-
-      if (!responseText || !responseText.trim()) {
-        return {
-          llmContent: `No search results or information found for query: "${params.query}"`,
-          returnDisplay: 'No information found.',
-        };
-      }
-
-      let modifiedResponseText = responseText;
-      const sourceListFormatted: string[] = [];
-
-      if (sources && sources.length > 0) {
-        sources.forEach((source: GroundingChunkItem, index: number) => {
-          const title = source.web?.title || 'Untitled';
-          const uri = source.web?.uri || 'No URI';
-          sourceListFormatted.push(`[${index + 1}] ${title} (${uri})`);
-        });
-
-        if (groundingSupports && groundingSupports.length > 0) {
-          const insertions: Array<{ index: number; marker: string }> = [];
-          groundingSupports.forEach((support: GroundingSupportItem) => {
-            if (support.segment && support.groundingChunkIndices) {
-              const citationMarker = support.groundingChunkIndices
-                .map((chunkIndex: number) => `[${chunkIndex + 1}]`)
-                .join('');
-              insertions.push({
-                index: support.segment.endIndex,
-                marker: citationMarker,
-              });
-            }
-          });
-
-          // Sort insertions by index in descending order to avoid shifting subsequent indices
-          insertions.sort((a, b) => b.index - a.index);
-
-          const responseChars = modifiedResponseText.split(''); // Use new variable
-          insertions.forEach((insertion) => {
-            // Fixed arrow function syntax
-            responseChars.splice(insertion.index, 0, insertion.marker);
-          });
-          modifiedResponseText = responseChars.join(''); // Assign back to modifiedResponseText
-        }
-
-        if (sourceListFormatted.length > 0) {
-          modifiedResponseText +=
-            '\n\nSources:\n' + sourceListFormatted.join('\n'); // Fixed string concatenation
-        }
-      }
-
-      return {
-        llmContent: `Web search results for "${params.query}":\n\n${modifiedResponseText}`,
-        returnDisplay: `Search results for "${params.query}" returned.`,
-        sources,
-      };
-    } catch (error: unknown) {
-      const errorMessage = `Error during web search for query "${params.query}": ${getErrorMessage(error)}`;
-      console.error(errorMessage, error);
-      return {
-        llmContent: `Error: ${errorMessage}`,
-        returnDisplay: `Error performing web search.`,
-      };
-    }
+  ): ToolInvocation<WebSearchToolParams, WebSearchToolResult> {
+    return new WebSearchToolInvocation(this.config, params);
   }
 }

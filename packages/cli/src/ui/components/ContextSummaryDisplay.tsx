@@ -4,13 +4,15 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React from 'react';
-import { Text } from 'ink';
+import type React from 'react';
+import { Box, Text } from 'ink';
 import { Colors } from '../colors.js';
 import {
-  type OpenFiles,
+  type IdeContext,
   type MCPServerConfig,
 } from '@qwen-code/qwen-code-core';
+import { useTerminalSize } from '../hooks/useTerminalSize.js';
+import { isNarrowWidth } from '../utils/isNarrowWidth.js';
 
 interface ContextSummaryDisplayProps {
   geminiMdFileCount: number;
@@ -18,7 +20,7 @@ interface ContextSummaryDisplayProps {
   mcpServers?: Record<string, MCPServerConfig>;
   blockedMcpServers?: Array<{ name: string; extensionName: string }>;
   showToolDescriptions?: boolean;
-  openFiles?: OpenFiles;
+  ideContext?: IdeContext;
 }
 
 export const ContextSummaryDisplay: React.FC<ContextSummaryDisplayProps> = ({
@@ -27,26 +29,30 @@ export const ContextSummaryDisplay: React.FC<ContextSummaryDisplayProps> = ({
   mcpServers,
   blockedMcpServers,
   showToolDescriptions,
-  openFiles,
+  ideContext,
 }) => {
+  const { columns: terminalWidth } = useTerminalSize();
+  const isNarrow = isNarrowWidth(terminalWidth);
   const mcpServerCount = Object.keys(mcpServers || {}).length;
   const blockedMcpServerCount = blockedMcpServers?.length || 0;
+  const openFileCount = ideContext?.workspaceState?.openFiles?.length ?? 0;
 
   if (
     geminiMdFileCount === 0 &&
     mcpServerCount === 0 &&
     blockedMcpServerCount === 0 &&
-    (openFiles?.recentOpenFiles?.length ?? 0) === 0
+    openFileCount === 0
   ) {
     return <Text> </Text>; // Render an empty space to reserve height
   }
 
-  const recentFilesText = (() => {
-    const count = openFiles?.recentOpenFiles?.length ?? 0;
-    if (count === 0) {
+  const openFilesText = (() => {
+    if (openFileCount === 0) {
       return '';
     }
-    return `${count} recent file${count > 1 ? 's' : ''} (ctrl+e to view)`;
+    return `${openFileCount} open file${
+      openFileCount > 1 ? 's' : ''
+    } (ctrl+g to view)`;
   })();
 
   const geminiMdText = (() => {
@@ -79,30 +85,36 @@ export const ContextSummaryDisplay: React.FC<ContextSummaryDisplayProps> = ({
       }
       parts.push(blockedText);
     }
-    return parts.join(', ');
+    let text = parts.join(', ');
+    // Add ctrl+t hint when MCP servers are available
+    if (mcpServers && Object.keys(mcpServers).length > 0) {
+      if (showToolDescriptions) {
+        text += ' (ctrl+t to toggle)';
+      } else {
+        text += ' (ctrl+t to view)';
+      }
+    }
+    return text;
   })();
 
-  let summaryText = 'Using: ';
-  const summaryParts = [];
-  if (recentFilesText) {
-    summaryParts.push(recentFilesText);
-  }
-  if (geminiMdText) {
-    summaryParts.push(geminiMdText);
-  }
-  if (mcpText) {
-    summaryParts.push(mcpText);
-  }
-  summaryText += summaryParts.join(' | ');
+  const summaryParts = [openFilesText, geminiMdText, mcpText].filter(Boolean);
 
-  // Add ctrl+t hint when MCP servers are available
-  if (mcpServers && Object.keys(mcpServers).length > 0) {
-    if (showToolDescriptions) {
-      summaryText += ' (ctrl+t to toggle)';
-    } else {
-      summaryText += ' (ctrl+t to view)';
-    }
+  if (isNarrow) {
+    return (
+      <Box flexDirection="column">
+        <Text color={Colors.Gray}>Using:</Text>
+        {summaryParts.map((part, index) => (
+          <Text key={index} color={Colors.Gray}>
+            {'  '}- {part}
+          </Text>
+        ))}
+      </Box>
+    );
   }
 
-  return <Text color={Colors.Gray}>{summaryText}</Text>;
+  return (
+    <Box>
+      <Text color={Colors.Gray}>Using: {summaryParts.join(' | ')}</Text>
+    </Box>
+  );
 };

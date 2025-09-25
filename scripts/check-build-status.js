@@ -4,9 +4,9 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import fs from 'fs';
-import path from 'path';
-import os from 'os'; // Import os module
+import fs from 'node:fs';
+import path from 'node:path';
+import os from 'node:os'; // Import os module
 
 // --- Configuration ---
 const cliPackageDir = path.resolve('packages', 'cli'); // Base directory for the CLI package
@@ -17,7 +17,7 @@ const filesToWatch = [
   path.join(cliPackageDir, 'tsconfig.json'),
 ]; // Specific files within the CLI package
 const buildDir = path.join(cliPackageDir, 'dist'); // Build output directory within the CLI package
-const warningsFilePath = path.join(os.tmpdir(), 'gemini-cli-warnings.txt'); // Temp file for warnings
+const warningsFilePath = path.join(os.tmpdir(), 'qwen-code-warnings.txt'); // Temp file for warnings
 // ---------------------
 
 function getMtime(filePath) {

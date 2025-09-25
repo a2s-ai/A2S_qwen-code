@@ -15,18 +15,46 @@
 
 </div>
 
+<div align="center">
+  
+  <a href="https://qwenlm.github.io/qwen-code-docs/de/">Deutsch</a> | 
+  <a href="https://qwenlm.github.io/qwen-code-docs/fr">français</a> | 
+  <a href="https://qwenlm.github.io/qwen-code-docs/ja/">日本語</a> | 
+  <a href="https://qwenlm.github.io/qwen-code-docs/ru">Русский</a> | 
+  <a href="https://qwenlm.github.io/qwen-code-docs/zh/">中文</a>
+  
+</div>
+
 Qwen Code is a powerful command-line AI workflow tool adapted from [**Gemini CLI**](https://github.com/google-gemini/gemini-cli) ([details](./README.gemini.md)), specifically optimized for [Qwen3-Coder](https://github.com/QwenLM/Qwen3-Coder) models. It enhances your development workflow with advanced code understanding, automated tasks, and intelligent assistance.
+
+## 💡 Free Options Available
+
+Get started with Qwen Code at no cost using any of these free options:
+
+### 🔥 Qwen OAuth (Recommended)
+
+- **2,000 requests per day** with no token limits
+- **60 requests per minute** rate limit
+- Simply run `qwen` and authenticate with your qwen.ai account
+- Automatic credential management and refresh
+- Use `/auth` command to switch to Qwen OAuth if you have initialized with OpenAI compatible mode
+
+### 🌏 Regional Free Tiers
+
+- **Mainland China**: ModelScope offers **2,000 free API calls per day**
+- **International**: OpenRouter provides **up to 1,000 free API calls per day** worldwide
+
+For detailed setup instructions, see [Authorization](#authorization).
 
 > [!WARNING]
 > **Token Usage Notice**: Qwen Code may issue multiple API calls per cycle, resulting in higher token usage (similar to Claude Code). We're actively optimizing API efficiency.
->
-> 💡 **Free Option**: ModelScope provides **2,000 free API calls per day** for users in mainland China. OpenRouter offers up to **1,000 free API calls per day** worldwide. For setup instructions, see [API Configuration](#api-configuration).
 
 ## Key Features
 
 - **Code Understanding & Editing** - Query and edit large codebases beyond traditional context window limits
 - **Workflow Automation** - Automate operational tasks like handling pull requests and complex rebases
 - **Enhanced Parser** - Adapted parser specifically optimized for Qwen-Coder models
+- **Vision Model Support** - Automatically detect images in your input and seamlessly switch to vision-capable models for multimodal analysis
 
 ## Installation
 
@@ -52,6 +80,12 @@ git clone https://github.com/QwenLM/qwen-code.git
 cd qwen-code
 npm install
 npm install -g .
+```
+
+### Install globally with Homebrew (macOS/Linux)
+
+```bash
+brew install qwen-code
 ```
 
 ## Quick Start
@@ -84,15 +118,95 @@ Create or edit `.qwen/settings.json` in your home directory:
 
 - **`/compress`** - Compress conversation history to continue within token limits
 - **`/clear`** - Clear all conversation history and start fresh
-- **`/status`** - Check current token usage and limits
+- **`/stats`** - Check current token usage and limits
 
 > 📝 **Note**: Session token limit applies to a single conversation, not cumulative API calls.
 
-### API Configuration
+### Vision Model Configuration
 
-Qwen Code supports multiple API providers. You can configure your API key through environment variables or a `.env` file in your project root.
+Qwen Code includes intelligent vision model auto-switching that detects images in your input and can automatically switch to vision-capable models for multimodal analysis. **This feature is enabled by default** - when you include images in your queries, you'll see a dialog asking how you'd like to handle the vision model switch.
 
-#### Configuration Methods
+#### Skip the Switch Dialog (Optional)
+
+If you don't want to see the interactive dialog each time, configure the default behavior in your `.qwen/settings.json`:
+
+```json
+{
+  "experimental": {
+    "vlmSwitchMode": "once"
+  }
+}
+```
+
+**Available modes:**
+
+- **`"once"`** - Switch to vision model for this query only, then revert
+- **`"session"`** - Switch to vision model for the entire session
+- **`"persist"`** - Continue with current model (no switching)
+- **Not set** - Show interactive dialog each time (default)
+
+#### Command Line Override
+
+You can also set the behavior via command line:
+
+```bash
+# Switch once per query
+qwen --vlm-switch-mode once
+
+# Switch for entire session
+qwen --vlm-switch-mode session
+
+# Never switch automatically
+qwen --vlm-switch-mode persist
+```
+
+#### Disable Vision Models (Optional)
+
+To completely disable vision model support, add to your `.qwen/settings.json`:
+
+```json
+{
+  "experimental": {
+    "visionModelPreview": false
+  }
+}
+```
+
+> 💡 **Tip**: In YOLO mode (`--yolo`), vision switching happens automatically without prompts when images are detected.
+
+### Authorization
+
+Choose your preferred authentication method based on your needs:
+
+#### 1. Qwen OAuth (🚀 Recommended - Start in 30 seconds)
+
+The easiest way to get started - completely free with generous quotas:
+
+```bash
+# Just run this command and follow the browser authentication
+qwen
+```
+
+**What happens:**
+
+1. **Instant Setup**: CLI opens your browser automatically
+2. **One-Click Login**: Authenticate with your qwen.ai account
+3. **Automatic Management**: Credentials cached locally for future use
+4. **No Configuration**: Zero setup required - just start coding!
+
+**Free Tier Benefits:**
+
+- ✅ **2,000 requests/day** (no token counting needed)
+- ✅ **60 requests/minute** rate limit
+- ✅ **Automatic credential refresh**
+- ✅ **Zero cost** for individual users
+- ℹ️ **Note**: Model fallback may occur to maintain service quality
+
+#### 2. OpenAI-Compatible API
+
+Use API keys for OpenAI or other compatible providers:
+
+**Configuration Methods:**
 
 1. **Environment Variables**
 
@@ -110,7 +224,7 @@ Qwen Code supports multiple API providers. You can configure your API key throug
    OPENAI_MODEL=your_model_choice
    ```
 
-#### API Provider Options
+**API Provider Options**
 
 > ⚠️ **Regional Notice:**
 >
@@ -265,7 +379,7 @@ qwen
 - `/help` - Display available commands
 - `/clear` - Clear conversation history
 - `/compress` - Compress history to save tokens
-- `/status` - Show current session information
+- `/stats` - Show current session information
 - `/exit` or `/quit` - Exit Qwen Code
 
 ### Keyboard Shortcuts
@@ -286,6 +400,8 @@ qwen
 ## Development & Contributing
 
 See [CONTRIBUTING.md](./CONTRIBUTING.md) to learn how to contribute to the project.
+
+For detailed authentication setup, see the [authentication guide](./docs/cli/authentication.md).
 
 ## Troubleshooting
 

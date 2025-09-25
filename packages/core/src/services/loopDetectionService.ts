@@ -4,12 +4,18 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { createHash } from 'crypto';
-import { GeminiEventType, ServerGeminiStreamEvent } from '../core/turn.js';
+import type { Content } from '@google/genai';
+import { createHash } from 'node:crypto';
+import type { ServerGeminiStreamEvent } from '../core/turn.js';
+import { GeminiEventType } from '../core/turn.js';
 import { logLoopDetected } from '../telemetry/loggers.js';
 import { LoopDetectedEvent, LoopType } from '../telemetry/types.js';
-import { Config, DEFAULT_GEMINI_FLASH_MODEL } from '../config/config.js';
-import { SchemaUnion, Type } from '@google/genai';
+import type { Config } from '../config/config.js';
+import {
+  isFunctionCall,
+  isFunctionResponse,
+} from '../utils/messageInspectors.js';
+import { DEFAULT_QWEN_FLASH_MODEL } from '../config/models.js';
 
 const TOOL_CALL_LOOP_THRESHOLD = 5;
 const CONTENT_LOOP_THRESHOLD = 10;
@@ -61,6 +67,7 @@ export class LoopDetectionService {
   private contentStats = new Map<string, number[]>();
   private lastContentIndex = 0;
   private loopDetected = false;
+  private inCodeBlock = false;
 
   // LLM loop track tracking
   private turnsInCurrentPrompt = 0;
@@ -156,8 +163,41 @@ export class LoopDetectionService {
    * 2. Truncating history if it exceeds the maximum length
    * 3. Analyzing content chunks for repetitive patterns using hashing
    * 4. Detecting loops when identical chunks appear frequently within a short distance
+   * 5. Disabling loop detection within code blocks to prevent false positives,
+   *    as repetitive code structures are common and not necessarily loops.
    */
   private checkContentLoop(content: string): boolean {
+    // Different content elements can often contain repetitive syntax that is not indicative of a loop.
+    // To avoid false positives, we detect when we encounter different content types and
+    // reset tracking to avoid analyzing content that spans across different element boundaries.
+    const numFences = (content.match(/```/g) ?? []).length;
+    const hasTable = /(^|\n)\s*(\|.*\||[|+-]{3,})/.test(content);
+    const hasListItem =
+      /(^|\n)\s*[*-+]\s/.test(content) || /(^|\n)\s*\d+\.\s/.test(content);
+    const hasHeading = /(^|\n)#+\s/.test(content);
+    const hasBlockquote = /(^|\n)>\s/.test(content);
+    const isDivider = /^[+-_=*\u2500-\u257F]+$/.test(content);
+
+    if (
+      numFences ||
+      hasTable ||
+      hasListItem ||
+      hasHeading ||
+      hasBlockquote ||
+      isDivider
+    ) {
+      // Reset tracking when different content elements are detected to avoid analyzing content
+      // that spans across different element boundaries.
+      this.resetContentTracking();
+    }
+
+    const wasInCodeBlock = this.inCodeBlock;
+    this.inCodeBlock =
+      numFences % 2 === 0 ? this.inCodeBlock : !this.inCodeBlock;
+    if (wasInCodeBlock || this.inCodeBlock || isDivider) {
+      return false;
+    }
+
     this.streamContentHistory += content;
 
     this.truncateAndUpdate();
@@ -293,11 +333,34 @@ export class LoopDetectionService {
     return originalChunk === currentChunk;
   }
 
+  private trimRecentHistory(recentHistory: Content[]): Content[] {
+    // A function response must be preceded by a function call.
+    // Continuously removes dangling function calls from the end of the history
+    // until the last turn is not a function call.
+    while (
+      recentHistory.length > 0 &&
+      isFunctionCall(recentHistory[recentHistory.length - 1])
+    ) {
+      recentHistory.pop();
+    }
+
+    // A function response should follow a function call.
+    // Continuously removes leading function responses from the beginning of history
+    // until the first turn is not a function response.
+    while (recentHistory.length > 0 && isFunctionResponse(recentHistory[0])) {
+      recentHistory.shift();
+    }
+
+    return recentHistory;
+  }
+
   private async checkForLoopWithLLM(signal: AbortSignal) {
     const recentHistory = this.config
       .getGeminiClient()
       .getHistory()
       .slice(-LLM_LOOP_CHECK_HISTORY_COUNT);
+
+    const trimmedHistory = this.trimRecentHistory(recentHistory);
 
     const prompt = `You are a sophisticated AI diagnostic agent specializing in identifying when a conversational AI is stuck in an unproductive state. Your task is to analyze the provided conversation history and determine if the assistant has ceased to make meaningful progress.
 
@@ -312,19 +375,19 @@ For example, a series of 'tool_A' or 'tool_B' tool calls that make small, distin
 
 Please analyze the conversation history to determine the possibility that the conversation is stuck in a repetitive, non-productive state.`;
     const contents = [
-      ...recentHistory,
+      ...trimmedHistory,
       { role: 'user', parts: [{ text: prompt }] },
     ];
-    const schema: SchemaUnion = {
-      type: Type.OBJECT,
+    const schema: Record<string, unknown> = {
+      type: 'object',
       properties: {
         reasoning: {
-          type: Type.STRING,
+          type: 'string',
           description:
             'Your reasoning on if the conversation is looping without forward progress.',
         },
         confidence: {
-          type: Type.NUMBER,
+          type: 'number',
           description:
             'A number between 0.0 and 1.0 representing your confidence that the conversation is in an unproductive state.',
         },
@@ -335,17 +398,17 @@ Please analyze the conversation history to determine the possibility that the co
     try {
       result = await this.config
         .getGeminiClient()
-        .generateJson(contents, schema, signal, DEFAULT_GEMINI_FLASH_MODEL);
+        .generateJson(contents, schema, signal, DEFAULT_QWEN_FLASH_MODEL);
     } catch (e) {
       // Do nothing, treat it as a non-loop.
       this.config.getDebugMode() ? console.error(e) : console.debug(e);
       return false;
     }
 
-    if (typeof result.confidence === 'number') {
-      if (result.confidence > 0.9) {
-        if (typeof result.reasoning === 'string' && result.reasoning) {
-          console.warn(result.reasoning);
+    if (typeof result['confidence'] === 'number') {
+      if (result['confidence'] > 0.9) {
+        if (typeof result['reasoning'] === 'string' && result['reasoning']) {
+          console.warn(result['reasoning']);
         }
         logLoopDetected(
           this.config,
@@ -356,7 +419,7 @@ Please analyze the conversation history to determine the possibility that the co
         this.llmCheckInterval = Math.round(
           MIN_LLM_CHECK_INTERVAL +
             (MAX_LLM_CHECK_INTERVAL - MIN_LLM_CHECK_INTERVAL) *
-              (1 - result.confidence),
+              (1 - result['confidence']),
         );
       }
     }

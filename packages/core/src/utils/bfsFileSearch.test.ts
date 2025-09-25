@@ -5,9 +5,9 @@
  */
 
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import * as fsPromises from 'fs/promises';
-import * as path from 'path';
-import * as os from 'os';
+import * as fsPromises from 'node:fs/promises';
+import * as path from 'node:path';
+import * as os from 'node:os';
 import { bfsFileSearch } from './bfsFileSearch.js';
 import { FileDiscoveryService } from '../services/fileDiscoveryService.js';
 
@@ -138,7 +138,7 @@ describe('bfsFileSearch', () => {
     });
 
     it('should ignore geminiignored files', async () => {
-      await createTestFile('node_modules/', 'project', '.geminiignore');
+      await createTestFile('node_modules/', 'project', '.qwenignore');
       await createTestFile('content', 'project', 'node_modules', 'target.txt');
       const targetFilePath = await createTestFile(
         'content',
@@ -188,5 +188,45 @@ describe('bfsFileSearch', () => {
 
       expect(result.sort()).toEqual([target1, target2].sort());
     });
+  });
+
+  it('should find all files in a complex directory structure', async () => {
+    // Create a complex directory structure to test correctness at scale
+    // without flaky performance checks.
+    const numDirs = 50;
+    const numFilesPerDir = 2;
+    const numTargetDirs = 10;
+
+    const dirCreationPromises: Array<Promise<unknown>> = [];
+    for (let i = 0; i < numDirs; i++) {
+      dirCreationPromises.push(createEmptyDir(`dir${i}`));
+      dirCreationPromises.push(createEmptyDir(`dir${i}`, 'subdir1'));
+      dirCreationPromises.push(createEmptyDir(`dir${i}`, 'subdir2'));
+      dirCreationPromises.push(createEmptyDir(`dir${i}`, 'subdir1', 'deep'));
+    }
+    await Promise.all(dirCreationPromises);
+
+    const fileCreationPromises: Array<Promise<string>> = [];
+    for (let i = 0; i < numTargetDirs; i++) {
+      // Add target files in some directories
+      fileCreationPromises.push(
+        createTestFile('content', `dir${i}`, 'QWEN.md'),
+      );
+      fileCreationPromises.push(
+        createTestFile('content', `dir${i}`, 'subdir1', 'QWEN.md'),
+      );
+    }
+    const expectedFiles = await Promise.all(fileCreationPromises);
+
+    const result = await bfsFileSearch(testRootDir, {
+      fileName: 'QWEN.md',
+      // Provide a generous maxDirs limit to ensure it doesn't prematurely stop
+      // in this large test case. Total dirs created is 200.
+      maxDirs: 250,
+    });
+
+    // Verify we found the exact files we created
+    expect(result.length).toBe(numTargetDirs * numFilesPerDir);
+    expect(result.sort()).toEqual(expectedFiles.sort());
   });
 });

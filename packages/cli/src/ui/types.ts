@@ -4,10 +4,12 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import {
+import type {
+  CompressionStatus,
   ToolCallConfirmationDetails,
   ToolResultDisplay,
 } from '@qwen-code/qwen-code-core';
+import type { PartListUnion } from '@google/genai';
 
 // Only defining the state enum needed by the UI
 export enum StreamingState {
@@ -46,7 +48,7 @@ export interface IndividualToolCallDisplay {
   callId: string;
   name: string;
   description: string;
-  resultDisplay: ToolResultDisplay | undefined;
+  resultDisplay: ToolResultDisplay | string | undefined;
   status: ToolCallStatus;
   confirmationDetails: ToolCallConfirmationDetails | undefined;
   renderOutputAsMarkdown?: boolean;
@@ -56,6 +58,13 @@ export interface CompressionProps {
   isPending: boolean;
   originalTokenCount: number | null;
   newTokenCount: number | null;
+  compressionStatus: CompressionStatus | null;
+}
+
+export interface SummaryProps {
+  isPending: boolean;
+  stage: 'generating' | 'saving' | 'completed';
+  filePath?: string; // Path to the saved summary file
 }
 
 export interface HistoryItemBase {
@@ -95,6 +104,12 @@ export type HistoryItemAbout = HistoryItemBase & {
   modelVersion: string;
   selectedAuthType: string;
   gcpProject: string;
+  ideClient: string;
+};
+
+export type HistoryItemHelp = HistoryItemBase & {
+  type: 'help';
+  timestamp: Date;
 };
 
 export type HistoryItemStats = HistoryItemBase & {
@@ -115,6 +130,11 @@ export type HistoryItemQuit = HistoryItemBase & {
   duration: string;
 };
 
+export type HistoryItemQuitConfirmation = HistoryItemBase & {
+  type: 'quit_confirmation';
+  duration: string;
+};
+
 export type HistoryItemToolGroup = HistoryItemBase & {
   type: 'tool_group';
   tools: IndividualToolCallDisplay[];
@@ -130,6 +150,11 @@ export type HistoryItemCompression = HistoryItemBase & {
   compression: CompressionProps;
 };
 
+export type HistoryItemSummary = HistoryItemBase & {
+  type: 'summary';
+  summary: SummaryProps;
+};
+
 // Using Omit<HistoryItem, 'id'> seems to have some issues with typescript's
 // type inference e.g. historyItem.type === 'tool_group' isn't auto-inferring that
 // 'tools' in historyItem.
@@ -142,12 +167,15 @@ export type HistoryItemWithoutId =
   | HistoryItemInfo
   | HistoryItemError
   | HistoryItemAbout
+  | HistoryItemHelp
   | HistoryItemToolGroup
   | HistoryItemStats
   | HistoryItemModelStats
   | HistoryItemToolStats
   | HistoryItemQuit
-  | HistoryItemCompression;
+  | HistoryItemQuitConfirmation
+  | HistoryItemCompression
+  | HistoryItemSummary;
 
 export type HistoryItem = HistoryItemWithoutId & { id: number };
 
@@ -157,12 +185,15 @@ export enum MessageType {
   ERROR = 'error',
   USER = 'user',
   ABOUT = 'about',
+  HELP = 'help',
   STATS = 'stats',
   MODEL_STATS = 'model_stats',
   TOOL_STATS = 'tool_stats',
   QUIT = 'quit',
+  QUIT_CONFIRMATION = 'quit_confirmation',
   GEMINI = 'gemini',
   COMPRESSION = 'compression',
+  SUMMARY = 'summary',
 }
 
 // Simplified message structure for internal feedback
@@ -181,7 +212,13 @@ export type Message =
       modelVersion: string;
       selectedAuthType: string;
       gcpProject: string;
+      ideClient: string;
       content?: string; // Optional content, not really used for ABOUT
+    }
+  | {
+      type: MessageType.HELP;
+      timestamp: Date;
+      content?: string; // Optional content, not really used for HELP
     }
   | {
       type: MessageType.STATS;
@@ -206,13 +243,24 @@ export type Message =
       content?: string;
     }
   | {
+      type: MessageType.QUIT_CONFIRMATION;
+      timestamp: Date;
+      duration: string;
+      content?: string;
+    }
+  | {
       type: MessageType.COMPRESSION;
       compression: CompressionProps;
+      timestamp: Date;
+    }
+  | {
+      type: MessageType.SUMMARY;
+      summary: SummaryProps;
       timestamp: Date;
     };
 
 export interface ConsoleMessageItem {
-  type: 'log' | 'warn' | 'error' | 'debug';
+  type: 'log' | 'warn' | 'error' | 'debug' | 'info';
   content: string;
   count: number;
 }
@@ -223,7 +271,7 @@ export interface ConsoleMessageItem {
  */
 export interface SubmitPromptResult {
   type: 'submit_prompt';
-  content: string;
+  content: PartListUnion;
 }
 
 /**

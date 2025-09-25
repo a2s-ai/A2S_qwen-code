@@ -4,9 +4,9 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { execSync } from 'child_process';
-import { readFileSync, writeFileSync } from 'fs';
-import { resolve } from 'path';
+import { execSync } from 'node:child_process';
+import { readFileSync, writeFileSync } from 'node:fs';
+import { resolve } from 'node:path';
 
 // A script to handle versioning and ensure all related changes are in a single, atomic commit.
 
@@ -24,8 +24,8 @@ function writeJson(filePath, data) {
 }
 
 // 1. Get the version from the command line arguments.
-const versionArg = process.argv[2];
-if (!versionArg) {
+const versionType = process.argv[2];
+if (!versionType) {
   console.error('Error: No version specified.');
   console.error(
     'Usage: npm run version <version> (e.g., 1.2.3 or patch|minor|major|prerelease)',
@@ -33,21 +33,30 @@ if (!versionArg) {
   process.exit(1);
 }
 
-// 2. Determine if we have a specific version or a version type
-const isSpecificVersion = /^\d+\.\d+\.\d+/.test(versionArg);
-const npmVersionArg = isSpecificVersion ? versionArg : versionArg;
+// 2. Bump the version in the root and all workspace package.json files.
+run(`npm version ${versionType} --no-git-tag-version --allow-same-version`);
 
-// 3. Bump the version in the root and all workspace package.json files.
-run(`npm version ${npmVersionArg} --no-git-tag-version --allow-same-version`);
-run(
-  `npm version ${npmVersionArg} --workspaces --no-git-tag-version --allow-same-version`,
+// 3. Get all workspaces and filter out the one we don't want to version.
+const workspacesToExclude = [];
+const lsOutput = JSON.parse(
+  execSync('npm ls --workspaces --json --depth=0').toString(),
+);
+const allWorkspaces = Object.keys(lsOutput.dependencies || {});
+const workspacesToVersion = allWorkspaces.filter(
+  (wsName) => !workspacesToExclude.includes(wsName),
 );
 
-// 3. Get the new version number from the root package.json
+for (const workspaceName of workspacesToVersion) {
+  run(
+    `npm version ${versionType} --workspace ${workspaceName} --no-git-tag-version --allow-same-version`,
+  );
+}
+
+// 4. Get the new version number from the root package.json
 const rootPackageJsonPath = resolve(process.cwd(), 'package.json');
 const newVersion = readJson(rootPackageJsonPath).version;
 
-// 4. Update the sandboxImageUri in the root package.json
+// 6. Update the sandboxImageUri in the root package.json
 const rootPackageJson = readJson(rootPackageJsonPath);
 if (rootPackageJson.config?.sandboxImageUri) {
   rootPackageJson.config.sandboxImageUri =
@@ -56,7 +65,7 @@ if (rootPackageJson.config?.sandboxImageUri) {
   writeJson(rootPackageJsonPath, rootPackageJson);
 }
 
-// 5. Update the sandboxImageUri in the cli package.json
+// 7. Update the sandboxImageUri in the cli package.json
 const cliPackageJsonPath = resolve(process.cwd(), 'packages/cli/package.json');
 const cliPackageJson = readJson(cliPackageJsonPath);
 if (cliPackageJson.config?.sandboxImageUri) {
@@ -68,7 +77,7 @@ if (cliPackageJson.config?.sandboxImageUri) {
   writeJson(cliPackageJsonPath, cliPackageJson);
 }
 
-// 6. Run `npm install` to update package-lock.json.
+// 8. Run `npm install` to update package-lock.json.
 run('npm install');
 
 console.log(`Successfully bumped versions to v${newVersion}.`);

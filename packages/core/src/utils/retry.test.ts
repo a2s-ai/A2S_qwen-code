@@ -6,13 +6,10 @@
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import type { HttpError } from './retry.js';
 import { retryWithBackoff } from './retry.js';
 import { setSimulate429 } from './testUtils.js';
-
-// Define an interface for the error with a status property
-interface HttpError extends Error {
-  status?: number;
-}
+import { AuthType } from '../core/contentGenerator.js';
 
 // Helper to create a mock function that fails a certain number of times
 const createFailingFunction = (
@@ -87,6 +84,7 @@ describe('retryWithBackoff', () => {
     // 2. IMPORTANT: Attach the rejection expectation to the promise *immediately*.
     //    This ensures a 'catch' handler is present before the promise can reject.
     //    The result is a new promise that resolves when the assertion is met.
+    // eslint-disable-next-line vitest/valid-expect
     const assertionPromise = expect(promise).rejects.toThrow(
       'Simulated error attempt 3',
     );
@@ -131,7 +129,7 @@ describe('retryWithBackoff', () => {
 
     // Attach the rejection expectation *before* running timers
     const assertionPromise =
-      expect(promise).rejects.toThrow('Too Many Requests');
+      expect(promise).rejects.toThrow('Too Many Requests'); // eslint-disable-line vitest/valid-expect
 
     // Run timers to trigger retries and eventual rejection
     await vi.runAllTimersAsync();
@@ -199,6 +197,7 @@ describe('retryWithBackoff', () => {
     // We expect rejections as mockFn fails 5 times
     const promise1 = runRetry();
     // Attach the rejection expectation *before* running timers
+    // eslint-disable-next-line vitest/valid-expect
     const assertionPromise1 = expect(promise1).rejects.toThrow();
     await vi.runAllTimersAsync(); // Advance for the delay in the first runRetry
     await assertionPromise1;
@@ -213,6 +212,7 @@ describe('retryWithBackoff', () => {
 
     const promise2 = runRetry();
     // Attach the rejection expectation *before* running timers
+    // eslint-disable-next-line vitest/valid-expect
     const assertionPromise2 = expect(promise2).rejects.toThrow();
     await vi.runAllTimersAsync(); // Advance for the delay in the second runRetry
     await assertionPromise2;
@@ -402,6 +402,175 @@ describe('retryWithBackoff', () => {
 
       // Should trigger fallback after 2 consecutive 429s (attempts 2-3)
       expect(fallbackCallback).toHaveBeenCalledWith('oauth-personal');
+    });
+  });
+
+  describe('Qwen OAuth 429 error handling', () => {
+    it('should retry for Qwen OAuth 429 errors that are throttling-related', async () => {
+      const errorWith429: HttpError = new Error('Rate limit exceeded');
+      errorWith429.status = 429;
+
+      const fn = vi
+        .fn()
+        .mockRejectedValueOnce(errorWith429)
+        .mockResolvedValue('success');
+
+      const promise = retryWithBackoff(fn, {
+        maxAttempts: 5,
+        initialDelayMs: 100,
+        maxDelayMs: 1000,
+        shouldRetry: () => true,
+        authType: AuthType.QWEN_OAUTH,
+      });
+
+      // Fast-forward time for delays
+      await vi.runAllTimersAsync();
+
+      await expect(promise).resolves.toBe('success');
+
+      // Should be called twice (1 failure + 1 success)
+      expect(fn).toHaveBeenCalledTimes(2);
+    });
+
+    it('should throw immediately for Qwen OAuth with insufficient_quota message', async () => {
+      const errorWithInsufficientQuota = new Error('insufficient_quota');
+
+      const fn = vi.fn().mockRejectedValue(errorWithInsufficientQuota);
+
+      const promise = retryWithBackoff(fn, {
+        maxAttempts: 5,
+        initialDelayMs: 1000,
+        maxDelayMs: 5000,
+        shouldRetry: () => true,
+        authType: AuthType.QWEN_OAUTH,
+      });
+
+      await expect(promise).rejects.toThrow(/Qwen API quota exceeded/);
+
+      // Should be called only once (no retries)
+      expect(fn).toHaveBeenCalledTimes(1);
+    });
+
+    it('should throw immediately for Qwen OAuth with free allocated quota exceeded message', async () => {
+      const errorWithQuotaExceeded = new Error(
+        'Free allocated quota exceeded.',
+      );
+
+      const fn = vi.fn().mockRejectedValue(errorWithQuotaExceeded);
+
+      const promise = retryWithBackoff(fn, {
+        maxAttempts: 5,
+        initialDelayMs: 1000,
+        maxDelayMs: 5000,
+        shouldRetry: () => true,
+        authType: AuthType.QWEN_OAUTH,
+      });
+
+      await expect(promise).rejects.toThrow(/Qwen API quota exceeded/);
+
+      // Should be called only once (no retries)
+      expect(fn).toHaveBeenCalledTimes(1);
+    });
+
+    it('should retry for Qwen OAuth with throttling message', async () => {
+      const throttlingError: HttpError = new Error(
+        'requests throttling triggered',
+      );
+      throttlingError.status = 429;
+
+      const fn = vi
+        .fn()
+        .mockRejectedValueOnce(throttlingError)
+        .mockRejectedValueOnce(throttlingError)
+        .mockResolvedValue('success');
+
+      const promise = retryWithBackoff(fn, {
+        maxAttempts: 5,
+        initialDelayMs: 100,
+        maxDelayMs: 1000,
+        shouldRetry: () => true,
+        authType: AuthType.QWEN_OAUTH,
+      });
+
+      // Fast-forward time for delays
+      await vi.runAllTimersAsync();
+
+      await expect(promise).resolves.toBe('success');
+
+      // Should be called 3 times (2 failures + 1 success)
+      expect(fn).toHaveBeenCalledTimes(3);
+    });
+
+    it('should retry for Qwen OAuth with throttling error', async () => {
+      const throttlingError: HttpError = new Error('throttling');
+      throttlingError.status = 429;
+
+      const fn = vi
+        .fn()
+        .mockRejectedValueOnce(throttlingError)
+        .mockResolvedValue('success');
+
+      const promise = retryWithBackoff(fn, {
+        maxAttempts: 5,
+        initialDelayMs: 100,
+        maxDelayMs: 1000,
+        shouldRetry: () => true,
+        authType: AuthType.QWEN_OAUTH,
+      });
+
+      // Fast-forward time for delays
+      await vi.runAllTimersAsync();
+
+      await expect(promise).resolves.toBe('success');
+
+      // Should be called 2 times (1 failure + 1 success)
+      expect(fn).toHaveBeenCalledTimes(2);
+    });
+
+    it('should throw immediately for Qwen OAuth with quota message', async () => {
+      const errorWithQuota = new Error('quota exceeded');
+
+      const fn = vi.fn().mockRejectedValue(errorWithQuota);
+
+      const promise = retryWithBackoff(fn, {
+        maxAttempts: 5,
+        initialDelayMs: 1000,
+        maxDelayMs: 5000,
+        shouldRetry: () => true,
+        authType: AuthType.QWEN_OAUTH,
+      });
+
+      await expect(promise).rejects.toThrow(/Qwen API quota exceeded/);
+
+      // Should be called only once (no retries)
+      expect(fn).toHaveBeenCalledTimes(1);
+    });
+
+    it('should retry normal errors for Qwen OAuth (not quota-related)', async () => {
+      const normalError: HttpError = new Error('Network error');
+      normalError.status = 500;
+
+      const fn = createFailingFunction(2, 'success');
+      // Replace the default 500 error with our normal error
+      fn.mockRejectedValueOnce(normalError)
+        .mockRejectedValueOnce(normalError)
+        .mockResolvedValue('success');
+
+      const promise = retryWithBackoff(fn, {
+        maxAttempts: 5,
+        initialDelayMs: 100,
+        maxDelayMs: 1000,
+        shouldRetry: () => true,
+        authType: AuthType.QWEN_OAUTH,
+      });
+
+      // Fast-forward time for delays
+      await vi.runAllTimersAsync();
+
+      await expect(promise).resolves.toBe('success');
+
+      // Should be called 3 times (2 failures + 1 success)
+      expect(fn).toHaveBeenCalledTimes(3);
     });
   });
 });
