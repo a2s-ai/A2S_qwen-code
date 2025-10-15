@@ -48,6 +48,9 @@ export class ContentGenerationPipeline {
       async (openaiRequest, context) => {
         const openaiResponse = (await this.client.chat.completions.create(
           openaiRequest,
+          {
+            signal: request.config?.abortSignal,
+          },
         )) as OpenAI.Chat.ChatCompletion;
 
         const geminiResponse =
@@ -78,6 +81,9 @@ export class ContentGenerationPipeline {
         // Stage 1: Create OpenAI stream
         const stream = (await this.client.chat.completions.create(
           openaiRequest,
+          {
+            signal: request.config?.abortSignal,
+          },
         )) as AsyncIterable<OpenAI.Chat.ChatCompletionChunk>;
 
         // Stage 2: Process stream with conversion and logging
@@ -221,6 +227,12 @@ export class ContentGenerationPipeline {
         mergedResponse.usageMetadata = lastResponse.usageMetadata;
       }
 
+      // Copy other essential properties from the current response
+      mergedResponse.responseId = response.responseId;
+      mergedResponse.createTime = response.createTime;
+      mergedResponse.modelVersion = response.modelVersion;
+      mergedResponse.promptFeedback = response.promptFeedback;
+
       // Update the collected responses with the merged response
       collectedGeminiResponses[collectedGeminiResponses.length - 1] =
         mergedResponse;
@@ -248,26 +260,23 @@ export class ContentGenerationPipeline {
       ...this.buildSamplingParameters(request),
     };
 
-    // Let provider enhance the request (e.g., add metadata, cache control)
-    const enhancedRequest = this.config.provider.buildRequest(
-      baseRequest,
-      userPromptId,
-    );
+    // Add streaming options if present
+    if (streaming) {
+      (
+        baseRequest as unknown as OpenAI.Chat.ChatCompletionCreateParamsStreaming
+      ).stream = true;
+      baseRequest.stream_options = { include_usage: true };
+    }
 
     // Add tools if present
     if (request.config?.tools) {
-      enhancedRequest.tools = await this.converter.convertGeminiToolsToOpenAI(
+      baseRequest.tools = await this.converter.convertGeminiToolsToOpenAI(
         request.config.tools,
       );
     }
 
-    // Add streaming options if needed
-    if (streaming) {
-      enhancedRequest.stream = true;
-      enhancedRequest.stream_options = { include_usage: true };
-    }
-
-    return enhancedRequest;
+    // Let provider enhance the request (e.g., add metadata, cache control)
+    return this.config.provider.buildRequest(baseRequest, userPromptId);
   }
 
   private buildSamplingParameters(
@@ -305,9 +314,9 @@ export class ContentGenerationPipeline {
     };
 
     const params = {
-      // Parameters with request fallback and defaults
-      temperature: getParameterValue('temperature', 'temperature', 0.0),
-      top_p: getParameterValue('top_p', 'topP', 1.0),
+      // Parameters with request fallback but no defaults
+      ...addParameterIfDefined('temperature', 'temperature', 'temperature'),
+      ...addParameterIfDefined('top_p', 'top_p', 'topP'),
 
       // Max tokens (special case: different property names)
       ...addParameterIfDefined('max_tokens', 'max_tokens', 'maxOutputTokens'),
