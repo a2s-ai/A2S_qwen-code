@@ -558,6 +558,16 @@ const SETTINGS_SCHEMA = {
         description: 'Enable OpenAI logging.',
         showInDialog: true,
       },
+      openAILoggingDir: {
+        type: 'string',
+        label: 'OpenAI Logging Directory',
+        category: 'Model',
+        requiresRestart: false,
+        default: undefined as string | undefined,
+        description:
+          'Custom directory path for OpenAI API logs. If not specified, defaults to logs/openai in the current working directory.',
+        showInDialog: true,
+      },
       generationConfig: {
         type: 'object',
         label: 'Generation Configuration',
@@ -847,6 +857,16 @@ const SETTINGS_SCHEMA = {
           'Use ripgrep for file content search instead of the fallback implementation. Provides faster search performance.',
         showInDialog: true,
       },
+      useBuiltinRipgrep: {
+        type: 'boolean',
+        label: 'Use Builtin Ripgrep',
+        category: 'Tools',
+        requiresRestart: false,
+        default: true,
+        description:
+          'Use the bundled ripgrep binary. When set to false, the system-level "rg" command will be used instead. This setting is only effective when useRipgrep is true.',
+        showInDialog: true,
+      },
       enableToolOutputTruncation: {
         type: 'boolean',
         label: 'Enable Tool Output Truncation',
@@ -991,6 +1011,24 @@ const SETTINGS_SCHEMA = {
             description: 'Whether to use an external authentication flow.',
             showInDialog: false,
           },
+          apiKey: {
+            type: 'string',
+            label: 'API Key',
+            category: 'Security',
+            requiresRestart: true,
+            default: undefined as string | undefined,
+            description: 'API key for OpenAI compatible authentication.',
+            showInDialog: false,
+          },
+          baseUrl: {
+            type: 'string',
+            label: 'Base URL',
+            category: 'Security',
+            requiresRestart: true,
+            default: undefined as string | undefined,
+            description: 'Base URL for OpenAI compatible API.',
+            showInDialog: false,
+          },
         },
       },
     },
@@ -1044,15 +1082,34 @@ const SETTINGS_SCHEMA = {
       },
       tavilyApiKey: {
         type: 'string',
-        label: 'Tavily API Key',
+        label: 'Tavily API Key (Deprecated)',
         category: 'Advanced',
         requiresRestart: false,
         default: undefined as string | undefined,
         description:
-          'The API key for the Tavily API. Required to enable the web_search tool functionality.',
+          '⚠️ DEPRECATED: Please use webSearch.provider configuration instead. Legacy API key for the Tavily API.',
         showInDialog: false,
       },
     },
+  },
+
+  webSearch: {
+    type: 'object',
+    label: 'Web Search',
+    category: 'Advanced',
+    requiresRestart: true,
+    default: undefined as
+      | {
+          provider: Array<{
+            type: 'tavily' | 'google' | 'dashscope';
+            apiKey?: string;
+            searchEngineId?: string;
+          }>;
+          default: string;
+        }
+      | undefined,
+    description: 'Configuration for web search providers.',
+    showInDialog: false,
   },
 
   experimental: {

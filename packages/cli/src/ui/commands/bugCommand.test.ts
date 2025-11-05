@@ -11,6 +11,7 @@ import { createMockCommandContext } from '../../test-utils/mockCommandContext.js
 import { getCliVersion } from '../../utils/version.js';
 import { GIT_COMMIT_INFO } from '../../generated/git-commit.js';
 import { formatMemoryUsage } from '../utils/formatters.js';
+import { AuthType } from '@qwen-code/qwen-code-core';
 
 // Mock dependencies
 vi.mock('open');
@@ -26,7 +27,6 @@ vi.mock('@qwen-code/qwen-code-core', async (importOriginal) => {
         getDetectedIdeDisplayName: vi.fn().mockReturnValue('VSCode'),
       }),
     },
-    sessionId: 'test-session-id',
   };
 });
 vi.mock('node:process', () => ({
@@ -58,6 +58,16 @@ describe('bugCommand', () => {
           getModel: () => 'qwen3-coder-plus',
           getBugCommand: () => undefined,
           getIdeMode: () => true,
+          getSessionId: () => 'test-session-id',
+        },
+        settings: {
+          merged: {
+            security: {
+              auth: {
+                selectedType: undefined,
+              },
+            },
+          },
         },
       },
     });
@@ -71,6 +81,7 @@ describe('bugCommand', () => {
 * **Session ID:** test-session-id
 * **Operating System:** test-platform v20.0.0
 * **Sandbox Environment:** test
+* **Auth Type:** 
 * **Model Version:** qwen3-coder-plus
 * **Memory Usage:** 100 MB
 * **IDE Client:** VSCode
@@ -91,6 +102,16 @@ describe('bugCommand', () => {
           getModel: () => 'qwen3-coder-plus',
           getBugCommand: () => ({ urlTemplate: customTemplate }),
           getIdeMode: () => true,
+          getSessionId: () => 'test-session-id',
+        },
+        settings: {
+          merged: {
+            security: {
+              auth: {
+                selectedType: undefined,
+              },
+            },
+          },
         },
       },
     });
@@ -104,6 +125,7 @@ describe('bugCommand', () => {
 * **Session ID:** test-session-id
 * **Operating System:** test-platform v20.0.0
 * **Sandbox Environment:** test
+* **Auth Type:** 
 * **Model Version:** qwen3-coder-plus
 * **Memory Usage:** 100 MB
 * **IDE Client:** VSCode
@@ -111,6 +133,52 @@ describe('bugCommand', () => {
     const expectedUrl = customTemplate
       .replace('{title}', encodeURIComponent('A custom bug'))
       .replace('{info}', encodeURIComponent(expectedInfo));
+
+    expect(open).toHaveBeenCalledWith(expectedUrl);
+  });
+
+  it('should include Base URL when auth type is OpenAI', async () => {
+    const mockContext = createMockCommandContext({
+      services: {
+        config: {
+          getModel: () => 'qwen3-coder-plus',
+          getBugCommand: () => undefined,
+          getIdeMode: () => true,
+          getSessionId: () => 'test-session-id',
+          getContentGeneratorConfig: () => ({
+            baseUrl: 'https://api.openai.com/v1',
+          }),
+        },
+        settings: {
+          merged: {
+            security: {
+              auth: {
+                selectedType: AuthType.USE_OPENAI,
+              },
+            },
+          },
+        },
+      },
+    });
+
+    if (!bugCommand.action) throw new Error('Action is not defined');
+    await bugCommand.action(mockContext, 'OpenAI bug');
+
+    const expectedInfo = `
+* **CLI Version:** 0.1.0
+* **Git Commit:** ${GIT_COMMIT_INFO}
+* **Session ID:** test-session-id
+* **Operating System:** test-platform v20.0.0
+* **Sandbox Environment:** test
+* **Auth Type:** ${AuthType.USE_OPENAI}
+* **Base URL:** https://api.openai.com/v1
+* **Model Version:** qwen3-coder-plus
+* **Memory Usage:** 100 MB
+* **IDE Client:** VSCode
+`;
+    const expectedUrl =
+      'https://github.com/QwenLM/qwen-code/issues/new?template=bug_report.yml&title=OpenAI%20bug&info=' +
+      encodeURIComponent(expectedInfo);
 
     expect(open).toHaveBeenCalledWith(expectedUrl);
   });
